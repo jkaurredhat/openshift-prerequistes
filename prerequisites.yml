@@ -1,0 +1,139 @@
+---
+
+- hosts: temp
+
+#  remote_user:
+#  ansible_become: yes
+
+  vars_prompt:
+
+    - name: "subscription_user"
+      prompt: "What is the username on the Red Hat subscription"
+      private: yes
+
+    - name: "subscription_password"
+      prompt: "What is the password to the Red Hat subscription"
+      private: yes
+
+
+  tasks:
+
+    - name: "Yum Clean All"
+      command: "yum clean all"
+      ignore_errors: true
+      failed_when: false
+
+    - name: "Cleaning Subscription Manager"
+      command: "subscription-manager clean"
+      ignore_errors: true
+      failed_when: false
+
+    - name: "Unregistering Red Hat Subscription"
+      command: "subscription-manager unregister"
+      ignore_errors: true
+      failed_when: false
+
+    - name: "Registering to Red Hat Subscription"
+      redhat_subscription:
+        username: "{{ subscription_user }}"
+        password: "{{ subscription_password }}"
+
+    - name: "Refreshing Subscription Repositories"
+      command: "subscription-manager refresh"
+
+    - name: "Getting OpenShift Subscription Pool ID"
+      shell: "subscription-manager list --available --matches '*OpenShift*' \
+              | grep 'Pool ID' | head -1 | awk '{print $3}'"
+      register: pool_id
+
+    - name: "Registering to Red Hat Subscription"
+      redhat_subscription:
+        pool_ids: "{{ pool_id.stdout }}"
+        activationkey: no
+        org_id: no
+
+#    - name: "Register as user credentials (against Red Hat Satellite 6.x)"
+#      redhat_subscription:
+#        username: user1
+#        password: passwd1
+#        environment: Production
+#        activationkey: no
+#        org_id: Red Hat
+#        autosubscribe: yes
+
+    - name: "Disable All Repositories"
+      command: 'subscription-manager repos --disable \*'
+
+    - name: "Enable Required OpenShift Repositories Only"
+      command: "subscription-manager repos
+                --enable=rhel-7-server-rpms \
+                --enable=rhel-7-server-extras-rpms \
+                --enable=rhel-7-server-ose-3.7-rpms \
+                --enable=rhel-7-fast-datapath-rpms"
+
+    - name: "Installing OpenShift Base Packages"
+      yum:
+        name: "{{item}}"
+        state: latest
+      with_items:
+        - wget
+        - git
+        - net-tools
+        - bind-utils
+        - bridge-utils
+        - iptables-services
+        - bash-completion
+        - kexec-tools
+        - sos
+        - psacct
+
+    - name: "Update all packages"
+      yum:
+        name: '*'
+        state: latest
+
+    - name: "System Rebooting after applied updates"
+      shell: sleep 2 && /sbin/shutdown -r now "Ansible system package upgraded"
+      async: 1
+      poll: 0
+      ignore_errors: yes
+
+    - name: "Waiting for servers to become online"
+      become: false
+      local_action: wait_for host={{ inventory_hostname }} port=22 search_regex=OpenSSH state=started sleep=5 delay=30 connect_timeout=5 timeout=300
+
+    - name: "Install Atomic OpenShift Utils"
+      yum:
+        name: "atomic-openshift-utils"
+        state: latest
+
+    - name: "Install Docker"
+      yum:
+        name: "docker"
+        state: latest
+
+
+## Uncomment below if you what to setup your
+## docker storage device
+#    - name: "Clearing Text From a File"
+#      copy:
+#        dest: /tmp/file.txt
+#        content: "DEVS=/dev/sdb\nVG=docker-vg\n"
+#        backup: yes
+#        owner: root
+#        group: root
+#        mode: 0644
+
+## Uncomment below if you are ready to setup
+## docker backend storage device
+#    - name: "Clearing Text From a File"
+#      command: "docker-storage-setup"
+
+## Uncomment below if you want ansible to
+## start and enable docker service
+#    - name: "Enable and start docker"
+#      service:
+#        name: docker
+#        state: started
+#        enabled: yes
+
